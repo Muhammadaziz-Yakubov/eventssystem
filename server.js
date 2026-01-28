@@ -87,6 +87,78 @@ bot.onText(/\/start/, async (msg) => {
   bot.sendMessage(chatId, 'Assalomu alaykum! 🎉\n\nIsmingiz va familiyangizni kiriting:');
 });
 
+// /admin komandasi
+bot.onText(/\/admin/, async (msg) => {
+  const chatId = msg.chat.id;
+  const telegramId = msg.from.id.toString();
+  
+  userStates[telegramId] = { step: 'admin_login' };
+  bot.sendMessage(chatId, '🔐 *Admin Panel*\n\nLogin kiriting:', {
+    parse_mode: 'Markdown'
+  });
+});
+
+// /stats komandasi - umumiy statistika
+bot.onText(/\/stats/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  try {
+    const totalEvents = await Event.countDocuments();
+    const activeEvents = await Event.countDocuments({ isActive: true });
+    const totalRegistrations = await Registration.countDocuments();
+    const canPayRegistrations = await Registration.countDocuments({ canPay: true });
+    
+    // Oxirgi 5 ta ro'yxatdan o'tish
+    const recentRegistrations = await Registration.find()
+      .populate('eventId')
+      .sort({ registeredAt: -1 })
+      .limit(5);
+    
+    let message = `📊 *Statistika*\n\n`;
+    message += `🎯 Tadbirlar: ${totalEvents} (faol: ${activeEvents})\n`;
+    message += `👥 Ro'yxatdan o'tganlar: ${totalRegistrations}\n`;
+    message += `💰 To'lovga tayyor: ${canPayRegistrations}\n\n`;
+    
+    if (recentRegistrations.length > 0) {
+      message += `📋 *Oxirgi ro'yxatdan o'tishlar:*\n`;
+      recentRegistrations.forEach((reg, index) => {
+        message += `${index + 1}. ${reg.firstName} ${reg.lastName} - ${reg.eventId.title}\n`;
+      });
+    }
+    
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Statistikani olishda xatolik yuz berdi');
+  }
+});
+
+// /events komandasi - tadbirlar ro'yxati
+bot.onText(/\/events/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  try {
+    const events = await Event.find().sort({ date: 1 });
+    
+    if (events.length === 0) {
+      bot.sendMessage(chatId, 'Hozircha tadbirlar mavjud emas');
+      return;
+    }
+    
+    let message = `🎯 *Tadbirlar ro'yxati*\n\n`;
+    events.forEach((event, index) => {
+      const status = event.isActive ? '✅ Faol' : '❌ Faol emas';
+      message += `${index + 1}. *${event.title}*\n`;
+      message += `   📅 ${event.date.toLocaleDateString('uz-UZ')} ⏰ ${event.time}\n`;
+      message += `   📍 ${event.location}\n`;
+      message += `   💰 ${event.price} so'm ${status}\n\n`;
+    });
+    
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Tadbirlarni olishda xatolik yuz berdi');
+  }
+});
+
 // Matnlarni qabul qilish
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
@@ -107,6 +179,24 @@ bot.on('message', async (msg) => {
       
       // Faol tadbirlarni ko'rsatish (pagination bilan)
       await showEventsPage(chatId, telegramId, 0);
+      break;
+      
+    case 'admin_login':
+      userStates[telegramId] = { 
+        step: 'admin_password', 
+        adminLogin: text 
+      };
+      bot.sendMessage(chatId, '🔐 Parolni kiriting:');
+      break;
+      
+    case 'admin_password':
+      if (state.adminLogin === process.env.ADMIN_LOGIN && text === process.env.ADMIN_PASSWORD) {
+        await showAdminPanel(chatId, telegramId);
+        delete userStates[telegramId];
+      } else {
+        bot.sendMessage(chatId, '❌ Login yoki parol noto\'g\'ri!\n\nQayta urinib ko\'ring /admin');
+        delete userStates[telegramId];
+      }
       break;
   }
 });
@@ -155,6 +245,60 @@ async function showEventsPage(chatId, telegramId, page = 0) {
   });
 }
 
+// Admin panelni ko'rsatish
+async function showAdminPanel(chatId, telegramId) {
+  try {
+    const totalEvents = await Event.countDocuments();
+    const activeEvents = await Event.countDocuments({ isActive: true });
+    const totalRegistrations = await Registration.countDocuments();
+    const canPayRegistrations = await Registration.countDocuments({ canPay: true });
+    
+    // Oxirgi 5 ta ro'yxatdan o'tish
+    const recentRegistrations = await Registration.find()
+      .populate('eventId')
+      .sort({ registeredAt: -1 })
+      .limit(5);
+    
+    let message = `🔐 *Admin Panel*\n\n`;
+    message += `📊 *Umumiy statistika:*\n`;
+    message += `🎯 Tadbirlar: ${totalEvents} (faol: ${activeEvents})\n`;
+    message += `👥 Ro'yxatdan o'tganlar: ${totalRegistrations}\n`;
+    message += `💰 To'lovga tayyor: ${canPayRegistrations}\n\n`;
+    
+    if (recentRegistrations.length > 0) {
+      message += `📋 *Oxirgi ro'yxatdan o'tishlar:*\n`;
+      recentRegistrations.forEach((reg, index) => {
+        message += `${index + 1}. ${reg.firstName} ${reg.lastName} - ${reg.eventId.title}\n`;
+      });
+    }
+    
+    message += `\n🔧 *Admin komandalari:*\n`;
+    message += `/stats - To'liq statistika\n`;
+    message += `/events - Tadbirlar ro'yxati\n`;
+    message += `/registrations - Ro'yxatdan o'tganlar\n`;
+    message += `/create_event - Yangi tadbir yaratish\n`;
+    message += `/help - Yordam`;
+    
+    bot.sendMessage(chatId, message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '📊 Statistika', callback_data: 'admin_stats' },
+            { text: '🎯 Tadbirlar', callback_data: 'admin_events' }
+          ],
+          [
+            { text: '👥 Ro\'yxatdan o\'tganlar', callback_data: 'admin_registrations' },
+            { text: '➕ Yangi tadbir', callback_data: 'admin_create_event' }
+          ]
+        ]
+      }
+    });
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Admin panelni yuklashda xatolik yuz berdi');
+  }
+}
+
 // Callback query handler
 bot.on('callback_query', async (callbackQuery) => {
   const chatId = callbackQuery.message.chat.id;
@@ -171,6 +315,26 @@ bot.on('callback_query', async (callbackQuery) => {
   
   if (data === 'page_info') {
     bot.answerCallbackQuery(callbackQuery.id, { text: 'Sahifa ma\'lumoti' });
+    return;
+  }
+  
+  // Admin panel callback lar
+  if (data.startsWith('admin_')) {
+    switch (data) {
+      case 'admin_stats':
+        await showAdminStats(chatId);
+        break;
+      case 'admin_events':
+        await showAdminEvents(chatId);
+        break;
+      case 'admin_registrations':
+        await showAdminRegistrations(chatId);
+        break;
+      case 'admin_create_event':
+        bot.sendMessage(chatId, '📝 Yangi tadbir yaratish:\n\nFormat:\n/nomi - Tadbir nomi\ntavsif - Tavsif\nsana - DD.MM.YYYY\nvaqt - HH:mm\njoyi - Joy\nnarx - 15000');
+        break;
+    }
+    bot.answerCallbackQuery(callbackQuery.id);
     return;
   }
   
@@ -254,6 +418,96 @@ bot.on('callback_query', async (callbackQuery) => {
   
   bot.answerCallbackQuery(callbackQuery.id);
 });
+
+// Admin statistikasi
+async function showAdminStats(chatId) {
+  try {
+    const totalEvents = await Event.countDocuments();
+    const activeEvents = await Event.countDocuments({ isActive: true });
+    const totalRegistrations = await Registration.countDocuments();
+    const canPayRegistrations = await Registration.countDocuments({ canPay: true });
+    
+    // Kunlik statistika
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayRegistrations = await Registration.countDocuments({
+      registeredAt: { $gte: today }
+    });
+    
+    let message = `📊 *To'liq statistika*\n\n`;
+    message += `🎯 *Tadbirlar:*\n`;
+    message += `   Jami: ${totalEvents}\n`;
+    message += `   Faol: ${activeEvents}\n`;
+    message += `   Nofaol: ${totalEvents - activeEvents}\n\n`;
+    
+    message += `👥 *Ro'yxatdan o'tishlar:*\n`;
+    message += `   Jami: ${totalRegistrations}\n`;
+    message += `   Bugun: ${todayRegistrations}\n`;
+    message += `   To'lovga tayyor: ${canPayRegistrations}\n`;
+    message += `   To'lovga tayyor emas: ${totalRegistrations - canPayRegistrations}\n`;
+    
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Statistikani olishda xatolik yuz berdi');
+  }
+}
+
+// Admin tadbirlari
+async function showAdminEvents(chatId) {
+  try {
+    const events = await Event.find().sort({ date: 1 });
+    
+    if (events.length === 0) {
+      bot.sendMessage(chatId, 'Hozircha tadbirlar mavjud emas');
+      return;
+    }
+    
+    let message = `🎯 *Tadbirlar ro'yxati*\n\n`;
+    events.forEach(async (event, index) => {
+      const status = event.isActive ? '✅ Faol' : '❌ Faol emas';
+      const registrationsCount = await Registration.countDocuments({ eventId: event._id });
+      
+      message += `${index + 1}. *${event.title}*\n`;
+      message += `   📅 ${event.date.toLocaleDateString('uz-UZ')} ⏰ ${event.time}\n`;
+      message += `   📍 ${event.location}\n`;
+      message += `   💰 ${event.price} so'm\n`;
+      message += `   👥 Ro'yxatdan o'tgan: ${registrationsCount}\n`;
+      message += `   ${status}\n\n`;
+    });
+    
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Tadbirlarni olishda xatolik yuz berdi');
+  }
+}
+
+// Admin ro'yxatdan o'tganlari
+async function showAdminRegistrations(chatId) {
+  try {
+    const registrations = await Registration.find()
+      .populate('eventId')
+      .sort({ registeredAt: -1 })
+      .limit(20);
+    
+    if (registrations.length === 0) {
+      bot.sendMessage(chatId, 'Hozircha hech kim ro\'yxatdan o\'tmagan');
+      return;
+    }
+    
+    let message = `👥 *Ro'yxatdan o'tganlar (oxirgi 20 ta)*\n\n`;
+    registrations.forEach((reg, index) => {
+      const paymentStatus = reg.canPay ? '✅ Tayyor' : '❌ Tayyor emas';
+      message += `${index + 1}. ${reg.firstName} ${reg.lastName}\n`;
+      message += `   🎯 ${reg.eventId.title}\n`;
+      message += `   💰 ${reg.eventId.price} so'm ${paymentStatus}\n`;
+      message += `   📅 ${reg.registeredAt.toLocaleDateString('uz-UZ')}\n\n`;
+    });
+    
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Ro\'yxatdan o\'tganlarni olishda xatolik yuz berdi');
+  }
+}
 
 // API Routes
 
